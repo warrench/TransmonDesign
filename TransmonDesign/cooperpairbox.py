@@ -12,6 +12,7 @@ import scipy.linalg as linalg
 import scipy.optimize as opt
 import numpy as np
 import qutip as qt
+import lmfit as lm
 
 
 class Hcpb(object):
@@ -241,17 +242,27 @@ class Hcpb(object):
                     n_op[i, j] = val
         return qt.Qobj(n_op)
 
-    def params_from_spectrum(self, f01, anharm, **kwargs):
+    def params_from_spectrum(self, f01, anharm, verbose=False, **kwargs):
         '''
         Method to work backwards from a desired transmon
         frequency and anharmonicty to extract the target
         Ej and Ec for design and fabrication. Updates the
         class to include these Ej and Ec as the new values
-        for extracting properties
+        for extracting properties.
+
+        Wraps around the lmfit minimize class and can inherit
+        any kwargs from that class
 
         Arguments:
             f01 (float): Desired qubit frequency
             anharm (float): Desired qubit anharmonicity
+
+        KeyWords:
+            verbose (boolean): return the result of the
+                lmfit class or just return Ej, Ec.
+                Default: return just Ej, Ec
+
+        
 
         Returns:
             (float, float): Ej and Ec of the transmon Hamiltonian
@@ -262,21 +273,31 @@ class Hcpb(object):
         if anharm > 0:
             anharm = -anharm
 
-        def fun(x):
-            self.Ej = x[0]
-            self.Ec = x[1]
-            return (self.fij(0, 1) - f01)**2 + 10*(self.anharm() - anharm)**2
+        def fun(params, f01, anharm):
+            self.Ej = params['Ej'].value
+            self.Ec = params['Ec'].value
+            res_f01 = self.fij(0,1) - f01
+            res_anharm = 10*(self.anharm() - anharm)
 
-        # Initial guesses from
-        # f01 ~ sqrt(8*Ej*Ec) - Ec
-        #  eta ~ -Ec
-        x0 = [(f01 - anharm)**2 / (8 * (-anharm)), -anharm]
-        ops = dict(bounds=[(0, 0), (x0[0] * 3, x0[1] * 3)],
-                    f_scale=1/x0[0],
-                    max_nfev=2000)
-        res = opt.least_squares(fun, x0, **{**ops, **kwargs})
-        self.Ej, self.Ec = res.x
-        return res.x
+            return np.array([res_f01, res_anharm])
+
+
+        params = lm.Parameters()
+        p0 = [(f01 - anharm)**2 / (8 * (-anharm)), -anharm]
+        params.add('Ej', 
+                   value=p0[0],
+                   min=0,
+                   max=1.5*p0[0])
+        params.add('Ec', 
+                   value=p0[1],
+                   min=0,
+                   max=1.5*p0[1])
+        ops = dict(args=([f01, anharm]))
+        res = lm.minimize(fun, params, **{**ops, **kwargs})
+        if verbose:
+            return res
+        else:
+            return res.params['Ej'].value, res.params['Ec'].value
 
     @property
     def nlevels(self):
@@ -324,6 +345,7 @@ class Hcpb(object):
         '''Set ng and recompute properties'''
         self._ng = value
         self._calc_H()
+
 
 if __name__ == '__main__':
     pass
