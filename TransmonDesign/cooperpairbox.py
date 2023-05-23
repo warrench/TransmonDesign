@@ -45,6 +45,8 @@ class Hcpb(object):
         self._ng = ng
         self.evals = None
         self.evecs = None
+        self._Ic = None
+        self._Rn = None
         # Generate the diagonal and offdiagonal components of the Hamiltonian
         self._gen_operators()
         # compute the eigenvectors and eigenvalues of the CPB
@@ -69,6 +71,8 @@ class Hcpb(object):
         if (self._Ej is None) or (self._Ec is None) or (self._ng is None):
             self.evals = None
             self.evecs = None
+            self._Ic = None
+            self._Rn = None
         else:
             self._diagonalize_H()
 
@@ -82,6 +86,20 @@ class Hcpb(object):
         evals, evecs = linalg.eigh_tridiagonal(ham_diag, ham_off)
         self.evals = np.real(np.array(evals))
         self.evecs = np.array(evecs)
+        order = np.floor(np.log10(evals[1]-evals[0]))
+        if order < 12:
+            unit = 'Hz'
+        if order < 9:
+            unit = 'kHz'
+        if order < 6:
+            unit = 'MHz'
+        if order < 3:
+            unit = 'GHz'
+        else:
+            raise ValueError('Eigenvalues are too large to be in GHz')
+
+        self._Ic = self._calc_Ic(unit=unit)
+        self._Rn = self._calc_IcRn(self._Ic)
 
     def evalue_k(self, k):
         '''
@@ -160,6 +178,85 @@ class Hcpb(object):
             (float): Anharmonicty defined as E12-E01
         '''
         return self.fij(1, 2) - self.fij(0, 1)
+    
+    def _calc_Ej_from_Ic(self, unit='GHz'):
+        """
+        Compute the value of Ej given the Ic from the
+        junction
+
+        Returns:
+            Ic = 2pi*Ej/Phi0 = 4e*pi*f
+
+            f = Ic/4e*pi
+
+            (float): Ej in GHz
+        """
+        elec = 1.60217662e-19 # [C]
+
+        if unit=='GHz':
+            return self._Ic/(4*np.pi*elec)/1e9
+        elif unit=='MHz':
+            return self._Ic/(4*np.pi*elec)/1e6
+        elif unit=='kHz':
+            return self._Ic/(4*np.pi*elec)/1e3
+        elif unit=='Hz':
+            return self._Ic/(4*np.pi*elec)
+        else:
+            raise NotImplementedError
+    
+    def _calc_Ic(self, unit='GHz'):
+        """
+        Compute the value of Ic given the Ej from the
+        junction
+
+        Returns:
+            Ic = 2pi*Ej/Phi0 = 4e*pi*f
+
+            (float): Ic in Amps
+        """
+        Phi0 = 2.067833848e-15 # h/2e  [Wb]
+        elec = 1.60217662e-19 # [C]
+        h = 6.62607004e-34 # [Js]
+
+        
+        if self._Ej is None:
+            return None
+        
+        if unit == 'GHz':
+            Ej = self._Ej*1e9
+        elif unit =='MHz':
+            Ej = self._Ej*1e6
+        elif unit == 'kHz':
+            Ej = self._Ej*1e3
+        elif unit == 'Hz':  
+            Ej = self._Ej
+        else:
+            raise NotImplementedError
+
+        return 4*elec*np.pi*Ej
+    
+    def _calc_IcRn(self, x, Delta=178e-6):
+        """
+        Compute the value of Rn depending on Ic from
+        the frequency of the qubit
+
+        IcRn = pi*Delta/2e
+
+        If Delta is in units of eV then we can drop out the
+        factor of e in the denominator
+
+        Arguments:
+            x (float): Ic or Rn depending on the input
+                    in units of Amps or Ohms
+
+        Returns:
+            (float): Rn in Ohms
+        """
+        if self._Ic is None:
+            return None
+        else:
+            return (np.pi/2)*Delta/self._Ic
+
 
     def n_ij(self, i, j):
         '''
@@ -181,6 +278,14 @@ class Hcpb(object):
         return n_ij
 
     def phi_ij(self, i, j, parity):
+        """
+        Compute the value of the phi operator for
+        coupling inductively elements together
+        
+        Returns:
+            (float): matrix element corresponding to the phi operator in
+            the transmon basis. Depends on the parity of the offset
+        """
         if int(parity % 2):
             cos_phi = np.diag(len(self._diag) - 1, k=1) + np.diag(len(self._diag) - 1, k=-1)
             cos_ij = np.conj(self.evec_k(i)) * cos_phi * self.evec_k(j)
@@ -191,7 +296,6 @@ class Hcpb(object):
             sin_ij = np.conj(self.evec_k(i)) * sin_phi * self.evec_k(j)
             sin_ij = np.abs(np.sum(sin_ij))
             return sin_ij
-
 
 
     def h0_to_qutip(self, n_transmon):
@@ -344,6 +448,31 @@ class Hcpb(object):
     def ng(self, value):
         '''Set ng and recompute properties'''
         self._ng = value
+        self._calc_H()
+
+    @property
+    def Ic(self):
+        '''Return Ic'''
+        return self._Ic
+    
+    @Ic.setter
+    def Ic(self, value, unit='GHz'):
+        '''Set Ic and recompute properties'''
+        self._Ic = value
+        self._Ej = self._calc_Ej_from_Ic(unit)
+        self._calc_H()
+
+    @property
+    def Rn(self):
+        '''Return Rn'''
+        return self._Rn
+    
+    @Rn.setter
+    def Rn(self, value, unit='GHz', delta=178e-6):
+        '''Set Rn and recompute properties'''
+        self._Rn = value
+        self._Ic = self._calc_IcRn(value, delta)
+        self._Ej = self._calc_Ej_from_Ic(unit)
         self._calc_H()
 
 
